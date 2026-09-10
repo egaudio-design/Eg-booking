@@ -6,7 +6,40 @@ create table public.applications(id uuid primary key default gen_random_uuid(),b
 create table public.conversations(id uuid primary key default gen_random_uuid(),created_at timestamptz default now());
 create table public.conversation_members(conversation_id uuid references public.conversations(id) on delete cascade,user_id uuid references public.profiles(id) on delete cascade,primary key(conversation_id,user_id));
 create table public.messages(id uuid primary key default gen_random_uuid(),conversation_id uuid references public.conversations(id) on delete cascade,sender_id uuid references public.profiles(id) on delete cascade,body text not null,created_at timestamptz default now(),read_at timestamptz);
-create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$begin insert into public.profiles(id,email,name) values(new.id,new.email,coalesce(new.raw_user_meta_data->>'name','')); return new; end;$$;
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path=public
+as $$
+begin
+  insert into public.profiles(
+    id,
+    email,
+    name,
+    role,
+    phone,
+    address,
+    approval_status
+  )
+  values(
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'name',''),
+    case
+      when new.raw_user_meta_data->>'requested_role' = 'venue'
+        then 'venue'::public.user_role
+      else
+        'dj'::public.user_role
+    end,
+    coalesce(new.raw_user_meta_data->>'phone',''),
+    coalesce(new.raw_user_meta_data->>'address',''),
+    'pending'
+  );
+
+  return new;
+end;
+$$;
 create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 alter table public.profiles enable row level security; alter table public.bookings enable row level security; alter table public.date_requests enable row level security; alter table public.applications enable row level security; alter table public.conversations enable row level security; alter table public.conversation_members enable row level security; alter table public.messages enable row level security;
 create or replace function public.my_role() returns public.user_role language sql stable security definer set search_path=public as $$select role from public.profiles where id=auth.uid()$$;
@@ -19,3 +52,17 @@ create policy members_read on public.conversation_members for select to authenti
 create policy messages_read on public.messages for select to authenticated using(exists(select 1 from public.conversation_members m where m.conversation_id=messages.conversation_id and m.user_id=auth.uid())); create policy messages_insert on public.messages for insert to authenticated with check(sender_id=auth.uid() and exists(select 1 from public.conversation_members m where m.conversation_id=messages.conversation_id and m.user_id=auth.uid())); create policy messages_update on public.messages for update to authenticated using(exists(select 1 from public.conversation_members m where m.conversation_id=messages.conversation_id and m.user_id=auth.uid()));
 -- Après création du premier compte :
 -- update public.profiles set role='admin' where email='TON_EMAIL';
+-- ==========================================
+-- VALIDATION DES COMPTES À L'INSCRIPTION
+-- ==========================================
+
+alter table public.profiles
+add column if not exists approval_status text
+not null
+default 'approved'
+check (approval_status in ('pending', 'approved', 'rejected'));
+
+-- Tous les comptes déjà existants restent validés
+update public.profiles
+set approval_status = 'approved'
+where approval_status is null;

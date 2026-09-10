@@ -1,6 +1,49 @@
 const {createClient}=supabase;const db=createClient(EG_CONFIG.SUPABASE_URL,EG_CONFIG.SUPABASE_ANON_KEY);let me,profiles=[],bookings=[],month=new Date(),cid;
 const $=s=>document.querySelector(s),esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const fmt=d=>new Date(d+'T12:00').toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});
-async function start(){let {data:{session}}=await db.auth.getSession();if(session)load();else $('#login').classList.remove('hide')}async function load(){let u=await db.auth.getUser();let r=await db.from('profiles').select('*').eq('id',u.data.user.id).single();if(r.error){$('#err').textContent=r.error.message;return}me=r.data;$('#login').classList.add('hide');$('#app').classList.remove('hide');$('#who').textContent=(me.name||me.email)+' · '+me.role;$('#adminTab').classList.toggle('hide',me.role!=='admin');await refresh();setupBookingUI()}
+async function start(){let {data:{session}}=await db.auth.getSession();if(session)load();else $('#login').classList.remove('hide')}async function load(){
+  let u=await db.auth.getUser();
+
+  if(!u.data.user){
+    $('#login').classList.remove('hide');
+    $('#app').classList.add('hide');
+    return;
+  }
+
+  let r=await db.from('profiles')
+    .select('*')
+    .eq('id',u.data.user.id)
+    .single();
+
+  if(r.error){
+    $('#err').textContent=r.error.message;
+    return;
+  }
+
+  me=r.data;
+
+  if(me.role!=='admin' && me.approval_status!=='approved'){
+    $('#login').classList.remove('hide');
+    $('#app').classList.add('hide');
+
+    if(me.approval_status==='pending'){
+      $('#err').textContent='⏳ Ton compte est en attente de validation par un administrateur.';
+    }else if(me.approval_status==='rejected'){
+      $('#err').textContent='❌ Ta demande de compte a été refusée.';
+    }else{
+      $('#err').textContent='Ton compte n’est pas encore validé.';
+    }
+
+    return;
+  }
+
+  $('#login').classList.add('hide');
+  $('#app').classList.remove('hide');
+  $('#who').textContent=(me.name||me.email)+' · '+me.role;
+  $('#adminTab').classList.toggle('hide',me.role!=='admin');
+
+  await refresh();
+  setupBookingUI();
+}
 async function refresh(){let p=await db.from('profiles').select('*').order('name');profiles=p.data||[];let q=db.from('bookings').select('*').order('booking_date');if(me.role==='dj')q=q.or(`dj_id.eq.${me.id},dj_id.is.null`);if(me.role==='venue')q=q.eq('venue_id',me.id);let b=await q;bookings=b.data||[];draw();profile();people();if(me.role==='admin')admin()}
 function draw(){let y=month.getFullYear(),m=month.getMonth();$('#month').textContent=new Date(y,m,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'});let g=$('#cal');g.innerHTML=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(x=>`<div class="head">${x}</div>`).join('');let s=new Date(y,m,1).getDay();s=s===0?6:s-1;g.innerHTML+=Array(s).fill('<div></div>').join('');for(let d=1;d<=new Date(y,m+1,0).getDate();d++){let ds=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`,bs=bookings.filter(x=>x.booking_date===ds),dots='';if(bs.some(x=>!x.dj_id))dots+='<i class="dot red"></i>';if(bs.some(x=>x.status==='En attente'))dots+='<i class="dot orange"></i>';if(bs.some(x=>x.status==='Confirmé'))dots+='<i class="dot green"></i>';g.innerHTML+=`<div class="day" data-date="${ds}"><b>${d}</b><div class="dots">${dots}</div></div>`}g.querySelectorAll('.day').forEach(x=>x.onclick=()=>dateClick(x.dataset.date));$('#bookings').innerHTML=bookings.map(b=>{let v=profiles.find(p=>p.id===b.venue_id),d=profiles.find(p=>p.id===b.dj_id);return `<div class="card"><b>📅 ${esc(fmt(b.booking_date))}</b><h3>🏢 ${esc(v?.function_or_venue||v?.name||'Établissement')}</h3><div>🎧 ${esc(d?.name||'DJ à définir')}</div><div>🕐 ${esc(b.time_text)}</div><div>📌 ${esc(b.status)}</div></div>`}).join('')}
 async function dateClick(ds){let bs=bookings.filter(x=>x.booking_date===ds);let html=`<div class="card"><h3>${fmt(ds)}</h3>${bs.map(b=>`<p>🏢 ${esc(profiles.find(p=>p.id===b.venue_id)?.function_or_venue||'Établissement')} · 🎧 ${esc(profiles.find(p=>p.id===b.dj_id)?.name||'DJ à définir')} · ${esc(b.time_text)}</p>`).join('')||'Aucun booking.'}</div>`;if(me.role==='dj'&&bs.some(b=>!b.dj_id)){let b=bs.find(b=>!b.dj_id);if(confirm('Postuler à cette date sans DJ ?')){let msg=prompt('Message à l’administrateur :','Je suis disponible pour cette date.');let a=await db.from('applications').insert({booking_id:b.id,dj_id:me.id,message:msg||''});if(!a.error){let admin=profiles.find(p=>p.role==='admin');if(admin)await send(admin.id,`🎧 ${me.name} postule au booking du ${fmt(ds)}.`);alert('Candidature envoyée.')}}}else if(me.role==='venue'&&confirm('Envoyer une demande pour cette date ?')){let t=prompt('Horaires :','23:00 - 04:00')||'';let n=prompt('Informations :','')||'';await db.from('date_requests').insert({requested_date:ds,venue_id:me.id,time_text:t,notes:n});alert('Demande envoyée à l’administrateur.')}else alert(html.replace(/<[^>]+>/g,''))}
@@ -44,30 +87,223 @@ async function createBooking(e){
   if(r.error){$('#bookingErr').textContent=r.error.message;return}
   closeBookingModal(); await refresh(); month=new Date(payload.booking_date+'T12:00'); draw(); alert('Booking créé avec succès.');
 }
-function admin(){ $('#users').innerHTML=profiles.map(p=>`<div class="card"><b>${esc(p.name||p.email)}</b><br>${esc(p.role)}<br><button data-role="${p.id}">Changer le rang</button></div>`).join('');$('#users').querySelectorAll('[data-role]').forEach(b=>b.onclick=async()=>{let r=prompt('Rang : admin, dj ou venue');if(['admin','dj','venue'].includes(r)){await db.from('profiles').update({role:r}).eq('id',b.dataset.role);refresh()}});db.from('date_requests').select('*').then(r=>$('#requests').innerHTML=(r.data||[]).map(x=>`<div class="card">📅 ${esc(x.requested_date)} · ${esc(x.status)}<br>${esc(x.notes)}</div>`).join(''))}
-function initUI(){
-  const loginForm=$('#loginForm');
-if(loginForm) loginForm.onsubmit=async e=>{
-  e.preventDefault();
-  $('#err').textContent='Connexion…';
+function admin(){
+  $('#users').innerHTML=profiles
+    .map(p=>`<div class="card">
+      <b>${esc(p.name||p.email)}</b><br>
+      ${esc(p.role)}<br>
+      ${p.approval_status==='pending'
+        ? '<b>⏳ En attente de validation</b>'
+        : p.approval_status==='rejected'
+          ? '<b>❌ Refusé</b>'
+          : '<b>✅ Validé</b>'}
+      <br>
+      <button data-role="${p.id}">Changer le rang</button>
+    </div>`)
+    .join('');
 
-  let r=await db.auth.signInWithPassword({
-    email:$('#email').value.trim(),
-    password:$('#password').value
+  $('#users').querySelectorAll('[data-role]').forEach(b=>{
+    b.onclick=async()=>{
+      const r=prompt('Rang : admin, dj ou venue');
+
+      if(['admin','dj','venue'].includes(r)){
+        await db.from('profiles')
+          .update({role:r})
+          .eq('id',b.dataset.role);
+
+        await refresh();
+      }
+    };
   });
 
-  if(r.error){
-    $('#err').textContent=r.error.message;
-  }else{
-    $('#err').textContent='';
-    await load();
+  db.from('profiles')
+    .select('*')
+    .eq('approval_status','pending')
+    .then(r=>{
+      $('#registrationRequests').innerHTML=(r.data||[])
+        .map(p=>`
+          <div class="card">
+            <b>${esc(p.name||p.email)}</b><br>
+            E-mail : ${esc(p.email)}<br>
+            Téléphone : ${esc(p.phone)}<br>
+            Type : ${p.role==='venue'?'Établissement':'DJ'}<br>
+            <button data-approve="${p.id}">✅ Accepter</button>
+            <button data-reject="${p.id}">❌ Refuser</button>
+          </div>
+        `)
+        .join('') || '<p>Aucune demande en attente.</p>';
+
+      $('#registrationRequests')
+        .querySelectorAll('[data-approve]')
+        .forEach(b=>{
+          b.onclick=async()=>{
+            const r=await db.from('profiles')
+              .update({approval_status:'approved'})
+              .eq('id',b.dataset.approve);
+
+            if(r.error){
+              alert(r.error.message);
+              return;
+            }
+
+            await refresh();
+          };
+        });
+
+      $('#registrationRequests')
+        .querySelectorAll('[data-reject]')
+        .forEach(b=>{
+          b.onclick=async()=>{
+            const r=await db.from('profiles')
+              .update({approval_status:'rejected'})
+              .eq('id',b.dataset.reject);
+
+            if(r.error){
+              alert(r.error.message);
+              return;
+            }
+
+            await refresh();
+          };
+        });
+    });
+
+  db.from('date_requests')
+    .select('*')
+    .then(r=>{
+      $('#requests').innerHTML=(r.data||[])
+        .map(x=>`<div class="card">
+          📅 ${esc(x.requested_date)} · ${esc(x.status)}<br>
+          ${esc(x.notes)}
+        </div>`)
+        .join('');
+    });
+}
+
+function initUI(){
+  const loginForm=$('#loginForm');
+
+  if(loginForm){
+    loginForm.onsubmit=async e=>{
+      e.preventDefault();
+      $('#err').textContent='Connexion…';
+
+      let r=await db.auth.signInWithPassword({
+        email:$('#email').value.trim(),
+        password:$('#password').value
+      });
+
+      if(r.error){
+        $('#err').textContent=r.error.message;
+      }else{
+        $('#err').textContent='';
+        await load();
+      }
+    };
   }
-};
-  const logout=$('#logout'); if(logout) logout.onclick=async()=>{await db.auth.signOut();location.reload();};
-  const pf=$('#profileForm'); if(pf) pf.onsubmit=saveProfile;
-  const sendForm=$('#send'); if(sendForm) sendForm.onsubmit=sendMsg;
-  const prev=$('#prev'); if(prev) prev.onclick=()=>{month.setMonth(month.getMonth()-1);draw();};
-  const next=$('#next'); if(next) next.onclick=()=>{month.setMonth(month.getMonth()+1);draw();};
-  document.querySelectorAll('nav button[data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('main section').forEach(s=>s.classList.add('hide'));const target=$('#'+b.dataset.tab);if(target)target.classList.remove('hide');});
+
+  const showRegister=$('#showRegister');
+  if(showRegister){
+    showRegister.onclick=()=>{
+      $('#login').classList.add('hide');
+      $('#register').classList.remove('hide');
+      $('#err').textContent='';
+    };
+  }
+
+  const backLogin=$('#backLogin');
+  if(backLogin){
+    backLogin.onclick=()=>{
+      $('#register').classList.add('hide');
+      $('#login').classList.remove('hide');
+      $('#registerErr').textContent='';
+      $('#registerOk').textContent='';
+    };
+  }
+
+  const registerForm=$('#registerForm');
+  if(registerForm){
+    registerForm.onsubmit=async e=>{
+      e.preventDefault();
+
+      $('#registerErr').textContent='';
+      $('#registerOk').textContent='';
+
+      const name=$('#rname').value.trim();
+      const email=$('#remail').value.trim();
+      const phone=$('#rphone').value.trim();
+      const address=$('#raddress').value.trim();
+      const role=$('#rrole').value;
+      const password=$('#rpassword').value;
+      const password2=$('#rpassword2').value;
+
+      if(password!==password2){
+        $('#registerErr').textContent='Les deux mots de passe ne correspondent pas.';
+        return;
+      }
+
+      if(!['dj','venue'].includes(role)){
+        $('#registerErr').textContent='Choisis un type de compte.';
+        return;
+      }
+
+      $('#registerErr').textContent='Création de la demande…';
+
+      const r=await db.auth.signUp({
+        email,
+        password,
+        options:{
+          data:{
+            name,
+            phone,
+            address,
+            requested_role:role
+          }
+        }
+      });
+
+      if(r.error){
+        $('#registerErr').textContent=r.error.message;
+        return;
+      }
+
+      $('#registerErr').textContent='';
+      $('#registerOk').textContent='Demande envoyée. Un administrateur doit valider ton compte.';
+
+      registerForm.reset();
+    };
+  }
+
+  const logout=$('#logout');
+  if(logout) logout.onclick=async()=>{
+    await db.auth.signOut();
+    location.reload();
+  };
+
+  const pf=$('#profileForm');
+  if(pf) pf.onsubmit=saveProfile;
+
+  const sendForm=$('#send');
+  if(sendForm) sendForm.onsubmit=sendMsg;
+
+  const prev=$('#prev');
+  if(prev) prev.onclick=()=>{
+    month.setMonth(month.getMonth()-1);
+    draw();
+  };
+
+  const next=$('#next');
+  if(next) next.onclick=()=>{
+    month.setMonth(month.getMonth()+1);
+    draw();
+  };
+
+  document.querySelectorAll('nav button[data-tab]').forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll('main section').forEach(s=>s.classList.add('hide'));
+      const target=$('#'+b.dataset.tab);
+      if(target) target.classList.remove('hide');
+    };
+  });
 }
 initUI();start();
