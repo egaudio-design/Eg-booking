@@ -1,0 +1,1 @@
+window.EG_CONFIG={SUPABASE_URL:'https://TON-PROJET.supabase.co',SUPABASE_ANON_KEY:'TA_CLE_ANON'};
