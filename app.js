@@ -47,7 +47,22 @@ async function createBooking(e){
 function admin(){ $('#users').innerHTML=profiles.map(p=>`<div class="card"><b>${esc(p.name||p.email)}</b><br>${esc(p.role)}<br><button data-role="${p.id}">Changer le rang</button></div>`).join('');$('#users').querySelectorAll('[data-role]').forEach(b=>b.onclick=async()=>{let r=prompt('Rang : admin, dj ou venue');if(['admin','dj','venue'].includes(r)){await db.from('profiles').update({role:r}).eq('id',b.dataset.role);refresh()}});db.from('date_requests').select('*').then(r=>$('#requests').innerHTML=(r.data||[]).map(x=>`<div class="card">📅 ${esc(x.requested_date)} · ${esc(x.status)}<br>${esc(x.notes)}</div>`).join(''))}
 function initUI(){
   const loginForm=$('#loginForm');
-  if(loginForm) loginForm.onsubmit=async e=>{e.preventDefault();$('#err').textContent='Connexion…';let r=await db.auth.signInWithPassword({email:$('#email').value.trim(),password:$('#password').value});if(r.error)$('#err').textContent=r.error.message;else $('#err').textContent='';};
+if(loginForm) loginForm.onsubmit=async e=>{
+  e.preventDefault();
+  $('#err').textContent='Connexion…';
+
+  let r=await db.auth.signInWithPassword({
+    email:$('#email').value.trim(),
+    password:$('#password').value
+  });
+
+  if(r.error){
+    $('#err').textContent=r.error.message;
+  }else{
+    $('#err').textContent='';
+    await load();
+  }
+};
   const logout=$('#logout'); if(logout) logout.onclick=async()=>{await db.auth.signOut();location.reload();};
   const pf=$('#profileForm'); if(pf) pf.onsubmit=saveProfile;
   const sendForm=$('#send'); if(sendForm) sendForm.onsubmit=sendMsg;
